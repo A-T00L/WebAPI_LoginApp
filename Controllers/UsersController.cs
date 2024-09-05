@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
 using WebAPI_LoginApp.Data;
 using WebAPI_LoginApp.DTOs;
 using WebAPI_LoginApp.Models;
@@ -31,13 +32,18 @@ namespace WebAPI_LoginApp.Controllers
             var objUser = dbcontext.Users.FirstOrDefault(x => x.Email == userDTO.Email);
             if (objUser == null)
             {
-                dbcontext.Users.Add(new User
+                //Using the PasswordHasher<TUser> class provided by ASP.NET Core Identity for password hashing
+                var passwordHasher = new PasswordHasher<User>();
+                var newUser = new User
                 {
                     FirstName = userDTO.FirstName,
                     LastName = userDTO.LastName,
-                    Email = userDTO.Email,
-                    Password = userDTO.Password
-                });
+                    Email = userDTO.Email
+                };
+                //Hashes the plain - text password before saving it to the database
+                newUser.Password = passwordHasher.HashPassword(newUser, userDTO.Password);
+
+                dbcontext.Users.Add(newUser);
                 dbcontext.SaveChanges();
                 return Ok("User Registered Successfully");
             }
@@ -50,10 +56,25 @@ namespace WebAPI_LoginApp.Controllers
         [Route("Login")]
         public IActionResult Login(LoginDTO loginDTO)
         {
-            var user = dbcontext.Users.FirstOrDefault( x => x.Email == loginDTO.Email && x.Password == loginDTO.Password);
+            var user = dbcontext.Users.FirstOrDefault( x => x.Email == loginDTO.Email);
             if (user != null)
             {
-                return Ok(user);
+                var passwordHasher = new PasswordHasher<User>();
+                //Compares the hashed password stored in the database with the plain-text password entered by the user during login
+                var verificationResult = passwordHasher.VerifyHashedPassword(user, user.Password , loginDTO.Password);
+
+                if(verificationResult == PasswordVerificationResult.Success)
+                {
+                    var userResponse = new UserResponseDTO
+                    {
+                        UserId = user.UserId,
+                        FirstName = user.FirstName,
+                        LastName = user.LastName,
+                        Email = user.Email,
+                        CreatedOn = user.CreatedOn
+                    };
+                    return Ok(userResponse);
+                }
             }
             return NoContent();
         }
@@ -61,16 +82,34 @@ namespace WebAPI_LoginApp.Controllers
         [Route("GetUsers")]
         public IActionResult GetUsers()
         {
-            return Ok(dbcontext.Users.ToList());
+            // Fetch all users and map to UserResponseDTO
+            var users = dbcontext.Users.Select(user => new UserResponseDTO
+            {
+                UserId = user.UserId,
+                FirstName = user.FirstName,
+                LastName = user.LastName,
+                Email = user.Email,
+                CreatedOn = user.CreatedOn
+            }).ToList();
+
+            return Ok(users);
         }
         [HttpGet]
         [Route("GetUser")]
         public IActionResult GetUser(int id)
         {
-            var user = dbcontext.Users.FirstOrDefault( x => x.UserId == id);
+            var user = dbcontext.Users.FirstOrDefault(x => x.UserId == id);
             if(user != null)
             {
-                return Ok(user);
+                var userResponse = new UserResponseDTO
+                {
+                    UserId = user.UserId,
+                    FirstName = user.FirstName,
+                    LastName = user.LastName,
+                    Email = user.Email,
+                    CreatedOn = user.CreatedOn
+                };
+                return Ok(userResponse);
             }
             else
             {
