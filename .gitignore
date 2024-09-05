@@ -365,3 +365,4 @@ FodyWeavers.xsd
 # Configuration files
 appsettings.json
 launchSettings.json
+appsettings.Development.json
