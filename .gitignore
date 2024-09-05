@@ -366,3 +366,6 @@ FodyWeavers.xsd
 appsettings.json
 launchSettings.json
 appsettings.Development.json
+
+#Httpfiles
+WebAPI_LoginApp.http
