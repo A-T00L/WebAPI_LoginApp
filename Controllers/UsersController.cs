@@ -1,5 +1,10 @@
-﻿using Microsoft.AspNetCore.Identity;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
 using WebAPI_LoginApp.Data;
 using WebAPI_LoginApp.DTOs;
 using WebAPI_LoginApp.Models;
@@ -12,12 +17,14 @@ namespace WebAPI_LoginApp.Controllers
     {
         //Create a readonly field for dbcontext
         private readonly AppDbContext dbcontext;
+        private readonly IConfiguration configuration;
 
         //Parameterized constructor which an instance of AppDbContext
-        public UsersController(AppDbContext _dbcontext)
+        public UsersController(AppDbContext _dbcontext, IConfiguration _configuration)
         {
             //Here we are assigning the value which we have in _dbcontext to our readonly field dbcontext
             this.dbcontext = _dbcontext; 
+            this.configuration = _configuration;
         }
         [HttpPost]
         [Route("Registration")]
@@ -61,10 +68,33 @@ namespace WebAPI_LoginApp.Controllers
             {
                 var passwordHasher = new PasswordHasher<User>();
                 //Compares the hashed password stored in the database with the plain-text password entered by the user during login
-                var verificationResult = passwordHasher.VerifyHashedPassword(user, user.Password , loginDTO.Password);
+                var verificationResult = passwordHasher.VerifyHashedPassword(user, user.Password, loginDTO.Password);
 
-                if(verificationResult == PasswordVerificationResult.Success)
+                if (verificationResult == PasswordVerificationResult.Success)
                 {
+                    #region JWT Authentication Code
+                    var claims = new[]
+                    {
+                       new Claim(JwtRegisteredClaimNames.Sub, configuration["Jwt:Subject"]),
+                       new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+                       new Claim("UserId", user.UserId.ToString()),
+                       new Claim("Email", user.Email.ToString())
+                    };
+                    var Key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Jwt:Key"]));
+                    var signIn = new SigningCredentials(Key, SecurityAlgorithms.HmacSha256);
+
+                    //Code to generate Token
+                    var token = new JwtSecurityToken(
+                        configuration["Jwt:Issuer"],
+                        configuration["Jwt:Audience"],
+                        claims,
+                        expires: DateTime.UtcNow.AddMinutes(60), //Token active for 60 minutes
+                        signingCredentials: signIn
+                        );
+                    string tokenValue = new JwtSecurityTokenHandler().WriteToken(token);
+                    #endregion
+
+                    //Mapping values of User Model class to UserResponseDTO class
                     var userResponse = new UserResponseDTO
                     {
                         UserId = user.UserId,
@@ -73,7 +103,7 @@ namespace WebAPI_LoginApp.Controllers
                         Email = user.Email,
                         CreatedOn = user.CreatedOn
                     };
-                    return Ok(userResponse);
+                    return Ok(new { Token = tokenValue, User = userResponse });
                 }
             }
             return NoContent();
@@ -96,6 +126,7 @@ namespace WebAPI_LoginApp.Controllers
         }
         [HttpGet]
         [Route("GetUser")]
+        [Authorize]
         public IActionResult GetUser(int id)
         {
             var user = dbcontext.Users.FirstOrDefault(x => x.UserId == id);
