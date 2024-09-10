@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
@@ -8,6 +9,7 @@ using System.Text;
 using WebAPI_LoginApp.Data;
 using WebAPI_LoginApp.DTOs;
 using WebAPI_LoginApp.Models;
+using WebAPI_LoginApp.Sevices;
 
 namespace WebAPI_LoginApp.Controllers
 {
@@ -18,13 +20,15 @@ namespace WebAPI_LoginApp.Controllers
         //Create a readonly field for dbcontext
         private readonly AppDbContext dbcontext;
         private readonly IConfiguration configuration;
+        private readonly EmailService emailService;
 
         //Parameterized constructor which an instance of AppDbContext
-        public UsersController(AppDbContext _dbcontext, IConfiguration _configuration)
+        public UsersController(AppDbContext _dbcontext, IConfiguration _configuration, EmailService _emailService)
         {
             //Here we are assigning the value which we have in _dbcontext to our readonly field dbcontext
             this.dbcontext = _dbcontext; 
             this.configuration = _configuration;
+            this.emailService = _emailService;
         }
         [HttpPost]
         [Route("Registration")]
@@ -45,7 +49,9 @@ namespace WebAPI_LoginApp.Controllers
                 {
                     FirstName = userDTO.FirstName,
                     LastName = userDTO.LastName,
-                    Email = userDTO.Email
+                    Email = userDTO.Email,
+                    ResetPasswordToken = null,
+                    ResetPasswordTokenExpiry = null
                 };
                 //Hashes the plain - text password before saving it to the database
                 newUser.Password = passwordHasher.HashPassword(newUser, userDTO.Password);
@@ -146,6 +152,73 @@ namespace WebAPI_LoginApp.Controllers
             {
                 return BadRequest("User does not exist");
             }
-        }   
+        }
+        [HttpPost]
+        [Route("ForgotPassword")]
+        public async Task<IActionResult> ForgotPassword(PasswordResetRequestDTO request)
+        {
+            var user = dbcontext.Users.FirstOrDefault(x => x.Email == request.Email);
+            if(user==null)
+            {
+                return NotFound("Email not registered, please register");
+            }
+
+            //Generate the request token and save it to the Db
+            var claims = new[]
+            {
+               new Claim(JwtRegisteredClaimNames.Sub, configuration["Jwt:Subject"]),
+               new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+               new Claim("User", user.UserId.ToString()),
+               new Claim("Email", user.Email.ToString()),
+            };
+
+            var Key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Jwt:Key"]));
+            var signIn = new SigningCredentials(Key, SecurityAlgorithms.HmacSha256);
+            var token = new JwtSecurityToken(
+                configuration["Jwt:Issuer"],
+                configuration["Jwt:Audience"],
+                claims,
+                expires: DateTime.UtcNow.AddMinutes(2),
+                signingCredentials: signIn);
+
+            var resetToken = new JwtSecurityTokenHandler().WriteToken(token);
+
+            user.ResetPasswordToken = resetToken;
+            user.ResetPasswordTokenExpiry = DateTime.UtcNow.AddMinutes(2);
+            dbcontext.SaveChanges();
+
+            var resetLink = Url.Action("ResetPassword", "UserController", new { token = user.ResetPasswordToken }, Request.Scheme);
+            var emailBody = $"Please reset your Password by clicking  <a href=\"{resetLink}\">here</a>.";
+
+            //Send the email
+            await emailService.SendEmailAsyn(user.Email, "Password Reset", emailBody);
+
+            return Ok($"Password reset link has been sent to your email : Token : {resetToken}");     
+        }
+        [HttpPost]
+        [Route("ResetPassword")]
+        public async Task<IActionResult> ResetPassword(ResetPasswordDTO resetPasswordDTO)
+        {
+            // Find the user by the reset token
+            var user = dbcontext.Users.FirstOrDefault(x => x.ResetPasswordToken == resetPasswordDTO.Token);
+
+            if (user == null || user.ResetPasswordTokenExpiry < DateTime.UtcNow)
+            {
+                return BadRequest("Invalid or expired token.");
+            }
+
+            // Hash the new password
+            var passwordHasher = new PasswordHasher<User>();
+            user.Password = passwordHasher.HashPassword(user, resetPasswordDTO.NewPassword);
+
+            // Clear the reset token and expiry fields
+            user.ResetPasswordToken = null;
+            user.ResetPasswordTokenExpiry = null;
+
+            // Save changes to the database
+            dbcontext.SaveChanges();
+
+            return Ok("Password has been reset successfully.");
+        }
     }
 }
